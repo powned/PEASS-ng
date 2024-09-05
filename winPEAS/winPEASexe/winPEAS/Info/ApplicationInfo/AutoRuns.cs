@@ -1,12 +1,14 @@
-﻿using System;
+﻿using Microsoft.Win32;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Management;
 using System.Text.RegularExpressions;
-using Microsoft.Win32;
+using winPEAS.Checks;
 using winPEAS.Helpers;
 using winPEAS.Helpers.Registry;
+using winPEAS.Helpers.YamlConfig;
 
 namespace winPEAS.Info.ApplicationInfo
 {
@@ -204,7 +206,7 @@ namespace winPEAS.Info.ApplicationInfo
                             {
                                 autorunLocationKey[0], autorunLocationKey[1] + "\\" + clsid_name, autorunLocationKey[2]
                             }
-                            : new List<string> {autorunLocationKey[0], autorunLocationKey[1] + "\\" + clsid_name});
+                            : new List<string> { autorunLocationKey[0], autorunLocationKey[1] + "\\" + clsid_name });
                     }
                 }
 
@@ -243,10 +245,10 @@ namespace winPEAS.Info.ApplicationInfo
                             string folder = Path.GetDirectoryName(filepath_cleaned);
 
                             try
-                            { 
+                            {
                                 //If the path doesn't exist, pass
                                 if (File.GetAttributes(filepath_cleaned).HasFlag(FileAttributes.Directory))
-                                { 
+                                {
                                     //If the path is already a folder, change the values of the params
                                     orig_filepath = "";
                                     folder = filepath_cleaned;
@@ -255,6 +257,9 @@ namespace winPEAS.Info.ApplicationInfo
                             catch
                             {
                             }
+
+                            var injectablePaths = new List<string>();
+                            var isUnquotedSpaced = MyUtils.CheckQuoteAndSpaceWithPermissions(filepath, out injectablePaths);
 
                             results.Add(new Dictionary<string, string>()
                             {
@@ -274,7 +279,7 @@ namespace winPEAS.Info.ApplicationInfo
                                     "interestingFileRights",
                                     orig_filepath.Length > 1 ? string.Join(", ", PermissionsHelper.GetPermissionsFile(orig_filepath, Checks.Checks.CurrentUserSiDs)) : ""
                                 },
-                                {"isUnquotedSpaced", MyUtils.CheckQuoteAndSpace(filepath).ToString()}
+                                {"isUnquotedSpaced", isUnquotedSpaced ? string.Join(",", injectablePaths) : "false" }
                             });
                         }
                     }
@@ -299,6 +304,9 @@ namespace winPEAS.Info.ApplicationInfo
                         orig_filepath = Environment.ExpandEnvironmentVariables(orig_filepath).Replace("'", "").Replace("\"", "");
                         string folder = Path.GetDirectoryName(orig_filepath);
 
+                        var injectablePaths = new List<string>();
+                        var isUnquotedSpaced = MyUtils.CheckQuoteAndSpaceWithPermissions(orig_filepath, out injectablePaths);
+
                         results.Add(new Dictionary<string, string>()
                         {
                             {"Reg", autorunLocation[0] + "\\" + reg},
@@ -317,7 +325,7 @@ namespace winPEAS.Info.ApplicationInfo
                                 "interestingFileRights",
                                 orig_filepath.Length > 1 ? string.Join(", ", PermissionsHelper.GetPermissionsFile(orig_filepath, Checks.Checks.CurrentUserSiDs)) : ""
                             },
-                            {"isUnquotedSpaced", MyUtils.CheckQuoteAndSpace(orig_filepath).ToString()}
+                            {"isUnquotedSpaced", isUnquotedSpaced ? string.Join(",", injectablePaths) : "false" }
                         });
                     }
                 }
@@ -336,23 +344,32 @@ namespace winPEAS.Info.ApplicationInfo
             var systemDrive = Environment.GetEnvironmentVariable("SystemDrive");
             var autorunLocations = new List<string>
             {
-                Environment.ExpandEnvironmentVariables(@"%programdata%\Microsoft\Windows\Start Menu\Programs\Startup"),               
+                Environment.ExpandEnvironmentVariables(@"%programdata%\Microsoft\Windows\Start Menu\Programs\Startup"),
             };
 
             string usersPath = Path.Combine(Environment.GetEnvironmentVariable(@"USERPROFILE"));
             usersPath = Directory.GetParent(usersPath).FullName;
 
+            var config = YamlConfigHelper.GetWindowsSearchConfig();
+            var pwdInsideHistory = config.variables.FirstOrDefault(v => v.name.Equals("pwd_inside_history", StringComparison.InvariantCultureIgnoreCase)).value;
+            // add .* around each element to match the whole line
+            var items = pwdInsideHistory.Split('|').Select(v => $".*{v}.*");
+            pwdInsideHistory = string.Join("|", items);
+
             try
             {
-                var userDirs = Directory.EnumerateDirectories(usersPath);
-
-                foreach (var userDir in userDirs)
+                if (Directory.Exists(usersPath))
                 {
-                    string startupPath = $@"{userDir}\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup";
+                    var userDirs = Directory.EnumerateDirectories(usersPath);
 
-                    if (Directory.Exists(startupPath))
+                    foreach (var userDir in userDirs)
                     {
-                        autorunLocations.Add(startupPath);
+                        string startupPath = $@"{userDir}\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup";
+
+                        if (Directory.Exists(startupPath))
+                        {
+                            autorunLocations.Add(startupPath);
+                        }
                     }
                 }
             }
@@ -364,22 +381,34 @@ namespace winPEAS.Info.ApplicationInfo
             {
                 try
                 {
-                    var files = Directory.EnumerateFiles(path, "*", SearchOption.TopDirectoryOnly);
-
-                    foreach (string filepath in files)
+                    if (Directory.Exists(path))
                     {
-                        string folder = Path.GetDirectoryName(filepath);
-                        results.Add(new Dictionary<string, string>() {
-                            { "Reg", "" },
-                            { "RegKey", "" },
-                            { "RegPermissions", "" },
-                            { "Folder", folder },
-                            { "File", filepath },
-                            { "isWritableReg", ""},
-                            { "interestingFolderRights", string.Join(", ", PermissionsHelper.GetPermissionsFolder(folder, Checks.Checks.CurrentUserSiDs))},
-                            { "interestingFileRights", string.Join(", ", PermissionsHelper.GetPermissionsFile(filepath, Checks.Checks.CurrentUserSiDs))},
-                            { "isUnquotedSpaced", MyUtils.CheckQuoteAndSpace(path).ToString() }
-                        });
+                        var files = Directory.EnumerateFiles(path, "*", SearchOption.TopDirectoryOnly);
+
+                        foreach (string filepath in files)
+                        {
+                            var fileContent = File.ReadAllText(filepath);
+                            var sensitiveInfoList = FileAnalysis.SearchContent(fileContent, pwdInsideHistory, false);
+                            // remove all non-printable and control characters
+                            sensitiveInfoList = sensitiveInfoList.Select(s => s = Regex.Replace(s, @"\p{C}+", string.Empty)).ToList();
+
+                            var injectablePaths = new List<string>();
+                            var isUnquotedSpaced = MyUtils.CheckQuoteAndSpaceWithPermissions(filepath, out injectablePaths);
+
+                            string folder = Path.GetDirectoryName(filepath);
+                            results.Add(new Dictionary<string, string>() {
+                                { "Reg", "" },
+                                { "RegKey", "" },
+                                { "RegPermissions", "" },
+                                { "Folder", folder },
+                                { "File", filepath },
+                                { "isWritableReg", ""},
+                                { "interestingFolderRights", string.Join(", ", PermissionsHelper.GetPermissionsFolder(folder, Checks.Checks.CurrentUserSiDs))},
+                                { "interestingFileRights", string.Join(", ", PermissionsHelper.GetPermissionsFile(filepath, Checks.Checks.CurrentUserSiDs))},
+                                {"isUnquotedSpaced", isUnquotedSpaced ? string.Join(",", injectablePaths) : "false" },
+                                { "sensitiveInfoList", string.Join(", ", sensitiveInfoList) },
+                            });
+                        }
                     }
                 }
                 catch (Exception)
@@ -397,6 +426,9 @@ namespace winPEAS.Info.ApplicationInfo
             {
                 try
                 {
+                    var injectablePaths = new List<string>();
+                    var isUnquotedSpaced = MyUtils.CheckQuoteAndSpaceWithPermissions(folder, out injectablePaths);
+
                     results.Add(new Dictionary<string, string>() {
                         { "Reg", "" },
                         { "RegKey", "" },
@@ -406,7 +438,7 @@ namespace winPEAS.Info.ApplicationInfo
                         { "isWritableReg", ""},
                         { "interestingFolderRights", string.Join(", ", PermissionsHelper.GetPermissionsFolder(folder, Checks.Checks.CurrentUserSiDs))},
                         { "interestingFileRights", ""},
-                        { "isUnquotedSpaced", MyUtils.CheckQuoteAndSpace(folder).ToString() }
+                        {"isUnquotedSpaced", isUnquotedSpaced ? string.Join(",", injectablePaths) : "false" }
                     });
                 }
                 catch (Exception)
@@ -441,6 +473,9 @@ namespace winPEAS.Info.ApplicationInfo
                                 try
                                 {
                                     string folder = Path.GetDirectoryName(filepathCleaned);
+                                    var injectablePaths = new List<string>();
+                                    var isUnquotedSpaced = MyUtils.CheckQuoteAndSpaceWithPermissions(command, out injectablePaths);
+
                                     results.Add(new Dictionary<string, string>()
                                 {
                                     {"Reg", ""},
@@ -457,7 +492,7 @@ namespace winPEAS.Info.ApplicationInfo
                                         "interestingFileRights",
                                         string.Join(", ", PermissionsHelper.GetPermissionsFile(filepath, Checks.Checks.CurrentUserSiDs))
                                     },
-                                    {"isUnquotedSpaced", MyUtils.CheckQuoteAndSpace(command).ToString()}
+                                    {"isUnquotedSpaced", isUnquotedSpaced ? string.Join(",", injectablePaths) : "false" }
                                 });
                                 }
                                 catch (Exception)
@@ -477,7 +512,7 @@ namespace winPEAS.Info.ApplicationInfo
 
         private static IEnumerable<Dictionary<string, string>> GetAutoRunsFiles()
         {
-            var results = new List<Dictionary<string, string>>();            
+            var results = new List<Dictionary<string, string>>();
             var systemDrive = Environment.GetEnvironmentVariable("SystemDrive");
             var autostartFiles = new HashSet<string>
             {
@@ -499,6 +534,8 @@ namespace winPEAS.Info.ApplicationInfo
                     if (File.Exists(path))
                     {
                         string folder = Path.GetDirectoryName(path);
+                        var injectablePaths = new List<string>();
+                        var isUnquotedSpaced = MyUtils.CheckQuoteAndSpaceWithPermissions(path, out injectablePaths);
 
                         results.Add(new Dictionary<string, string>
                         {
@@ -510,7 +547,7 @@ namespace winPEAS.Info.ApplicationInfo
                             { "isWritableReg", ""},
                             { "interestingFolderRights", string.Join(", ", PermissionsHelper.GetPermissionsFolder(folder, Checks.Checks.CurrentUserSiDs))},
                             { "interestingFileRights", string.Join(", ", PermissionsHelper.GetPermissionsFile(path, Checks.Checks.CurrentUserSiDs))},
-                            { "isUnquotedSpaced",  MyUtils.CheckQuoteAndSpace(path).ToString() }
+                            {"isUnquotedSpaced", isUnquotedSpaced ? string.Join(",", injectablePaths) : "false" }
                         });
                     }
                 }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -27,7 +27,7 @@ namespace winPEAS.Checks
             }.ForEach(action => CheckRunner.Run(action, isDebug));
         }
 
-        private static List<CustomFileInfo> InitializeFileSearch(bool useProgramFiles=true)
+        private static List<CustomFileInfo> InitializeFileSearch(bool useProgramFiles = true)
         {
             var files = new List<CustomFileInfo>();
             var systemDrive = $"{SearchHelper.SystemDrive}\\";
@@ -97,11 +97,21 @@ namespace winPEAS.Checks
                     else
                     {
                         foreach (var fold in file.FullPath.Split('\\').Skip(1))
-                        {
-                            isFileFound = Regex.IsMatch(fold, pattern, RegexOptions.IgnoreCase);
-                            if (isFileFound) break;
+                        {   
+                            try
+                            {
+                                isFileFound = Regex.IsMatch(fold, pattern, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(20));
+                                if (isFileFound) break;
+                            }
+                            catch (RegexMatchTimeoutException e)
+                            {
+                                if (Checks.IsDebug)
+                                {
+                                    Beaprint.GrayPrint($"The file in folder regex {pattern} had a timeout in {fold} (ReDoS avoided but regex unchecked in a file)");
+                                }
+                            }
                         }
-                    }   
+                    }
                 }
                 else
                 {
@@ -111,14 +121,25 @@ namespace winPEAS.Checks
                     }
                     else
                     {
-                        isFileFound = Regex.IsMatch(file.Filename, pattern, RegexOptions.IgnoreCase);
+                        try
+                        {
+                            isFileFound = Regex.IsMatch(file.Filename, pattern, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(20));
+                        }
+                        catch (RegexMatchTimeoutException e)
+                        {
+                            if (Checks.IsDebug)
+                            {
+                                Beaprint.GrayPrint($"The file regex {pattern} had a timeout in {file.Filename} (ReDoS avoided but regex unchecked in a file)");
+                            }
+                        }
                     }
                 }
 
 
                 if (isFileFound)
                 {
-                    if (!somethingFound) {
+                    if (!somethingFound)
+                    {
                         Beaprint.MainPrint($"Found {searchName} Files");
                         somethingFound = true;
                     }
@@ -132,7 +153,7 @@ namespace winPEAS.Checks
                         }
                     }
                     // there are inner sections
-                    else 
+                    else
                     {
                         foreach (var innerFileToSearch in fileSettings.files)
                         {
@@ -143,11 +164,11 @@ namespace winPEAS.Checks
                 }
             }
 
-           
+
             return new bool[] { false, somethingFound };
         }
 
-        private static List<string> SearchContent(string text, string regex_str, bool caseinsensitive)
+        public static List<string> SearchContent(string text, string regex_str, bool caseinsensitive)
         {
             List<string> foundMatches = new List<string>();
 
@@ -157,16 +178,20 @@ namespace winPEAS.Checks
                 bool is_re_match = false;
                 try
                 {
+                    // Escape backslashes in the regex string - I don't think this is needed anymore
+                    //string escapedRegex = regex_str.Trim().Replace(@"\", @"\\");
+                    string escapedRegex = regex_str.Trim();
+
                     // Use "IsMatch" because it supports timeout, if exception is thrown exit the func to avoid ReDoS in "rgx.Matches"
                     if (caseinsensitive)
                     {
-                        is_re_match = Regex.IsMatch(text, regex_str.Trim(), RegexOptions.IgnoreCase, TimeSpan.FromSeconds(120));
-                        rgx = new Regex(regex_str.Trim(), RegexOptions.IgnoreCase);
+                        is_re_match = Regex.IsMatch(text, escapedRegex, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(120));
+                        rgx = new Regex(escapedRegex, RegexOptions.IgnoreCase);
                     }
                     else
                     {
-                        is_re_match = Regex.IsMatch(text, regex_str.Trim(), RegexOptions.None, TimeSpan.FromSeconds(120));
-                        rgx = new Regex(regex_str.Trim());
+                        is_re_match = Regex.IsMatch(text, escapedRegex, RegexOptions.None, TimeSpan.FromSeconds(120));
+                        rgx = new Regex(escapedRegex);
                     }
                 }
                 catch (RegexMatchTimeoutException e)
@@ -177,7 +202,7 @@ namespace winPEAS.Checks
                     }
                     return foundMatches;
                 }
-                
+
                 if (!is_re_match)
                 {
                     return foundMatches;
@@ -187,10 +212,10 @@ namespace winPEAS.Checks
                 foreach (Match match in rgx.Matches(text))
                 {
                     if (cont > 10) break;
-                    
+
                     if (match.Value.Length < 400 && match.Value.Trim().Length > 2)
                         foundMatches.Add(match.Value);
-                    
+
                     cont++;
                 }
             }
@@ -198,8 +223,6 @@ namespace winPEAS.Checks
             {
                 Beaprint.GrayPrint($"Error looking for regex {regex_str} inside files: {e}");
             }
-
-            //}
 
             return foundMatches;
         }
@@ -317,6 +340,74 @@ namespace winPEAS.Checks
                     Console.WriteLine(string.Format("Key = {0}, Value = {1}", kvp.Key, kvp.Value));
                 }*/
 
+                //double pb = 0;
+                //using (var progress = new ProgressBar())
+                //{
+                //    CheckRunner.Run(() =>
+                //    {
+                //        int num_threads = 8;
+                //        try
+                //        {
+                //            num_threads = Environment.ProcessorCount;
+                //        }
+                //        catch (Exception ex) { }
+
+                //        Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = num_threads }, f =>
+                //        {
+
+                //            foreach (var regex_obj in config.regular_expresions)
+                //            {
+                //                foreach (var regex in regex_obj.regexes)
+                //                {
+                //                    if (regex.disable != null && regex.disable.ToLower().Contains("winpeas"))
+                //                    {
+                //                        continue;
+                //                    }
+
+                //                    List<string> results = new List<string> { };
+
+                //                    var timer = new Stopwatch();
+                //                    if (Checks.IsDebug)
+                //                    {
+                //                        timer.Start();
+                //                    }
+
+
+                //                    try
+                //                    {
+                //                        string text = File.ReadAllText(f.FullPath);
+
+                //                        results = SearchContent(text, regex.regex, (bool)regex.caseinsensitive);
+                //                        if (results.Count > 0)
+                //                        {
+                //                            if (!foundRegexes.ContainsKey(regex_obj.name)) foundRegexes[regex_obj.name] = new Dictionary<string, Dictionary<string, List<string>>> { };
+                //                            if (!foundRegexes[regex_obj.name].ContainsKey(regex.name)) foundRegexes[regex_obj.name][regex.name] = new Dictionary<string, List<string>> { };
+
+                //                            foundRegexes[regex_obj.name][regex.name][f.FullPath] = results;
+                //                        }
+                //                    }
+                //                    catch (System.IO.IOException)
+                //                    {
+                //                        // Cannot read the file
+                //                    }
+
+                //                    if (Checks.IsDebug)
+                //                    {
+                //                        timer.Stop();
+
+                //                        TimeSpan timeTaken = timer.Elapsed;
+                //                        if (timeTaken.TotalMilliseconds > 20000)
+                //                            Beaprint.PrintDebugLine($"\nThe regex {regex.regex} took {timeTaken.TotalMilliseconds}s in {f.FullPath}");
+                //                    }
+                //                }
+                //            }
+                //            pb += (double)100 / files.Count;
+                //            progress.Report(pb / 100); //Value must be in [0..1] range
+                //        });
+                //    }, Checks.IsDebug);
+                //}
+
+
                 double pb = 0;
                 using (var progress = new ProgressBar())
                 {
@@ -331,7 +422,6 @@ namespace winPEAS.Checks
 
                         Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = num_threads }, f =>
                         {
-
                             foreach (var regex_obj in config.regular_expresions)
                             {
                                 foreach (var regex in regex_obj.regexes)
@@ -341,26 +431,39 @@ namespace winPEAS.Checks
                                         continue;
                                     }
 
-                                    List<string> results = new List<string> { };
+                                    Dictionary<string, List<string>> fileResults = new Dictionary<string, List<string>>();
 
                                     var timer = new Stopwatch();
                                     if (Checks.IsDebug)
                                     {
                                         timer.Start();
                                     }
-                                    
 
                                     try
                                     {
-                                        string text = System.IO.File.ReadAllText(f.FullPath);
-                                        
-                                        results = SearchContent(text, regex.regex, (bool)regex.caseinsensitive);
-                                        if (results.Count > 0)
+                                        using (StreamReader sr = new StreamReader(f.FullPath))
+                                        {
+                                            string line;
+                                            while ((line = sr.ReadLine()) != null)
+                                            {
+                                                List<string> results = SearchContent(line, regex.regex, (bool)regex.caseinsensitive);
+                                                if (results.Count > 0)
+                                                {
+                                                    if (!fileResults.ContainsKey(f.FullPath))
+                                                    {
+                                                        fileResults[f.FullPath] = new List<string>();
+                                                    }
+                                                    fileResults[f.FullPath].AddRange(results);
+                                                }
+                                            }
+                                        }
+
+                                        if (fileResults.Count > 0)
                                         {
                                             if (!foundRegexes.ContainsKey(regex_obj.name)) foundRegexes[regex_obj.name] = new Dictionary<string, Dictionary<string, List<string>>> { };
                                             if (!foundRegexes[regex_obj.name].ContainsKey(regex.name)) foundRegexes[regex_obj.name][regex.name] = new Dictionary<string, List<string>> { };
 
-                                            foundRegexes[regex_obj.name][regex.name][f.FullPath] = results;
+                                            foundRegexes[regex_obj.name][regex.name] = fileResults;
                                         }
                                     }
                                     catch (System.IO.IOException)
@@ -373,8 +476,8 @@ namespace winPEAS.Checks
                                         timer.Stop();
 
                                         TimeSpan timeTaken = timer.Elapsed;
-                                        if (timeTaken.TotalMilliseconds > 20000)
-                                            Beaprint.PrintDebugLine($"\nThe regex {regex.regex} took {timeTaken.TotalMilliseconds}s in {f.FullPath}");
+                                        if (timeTaken.TotalMilliseconds > 10000)
+                                            Beaprint.PrintDebugLine($"\nThe regex {regex.regex} took {timeTaken.TotalMilliseconds}ms in {f.FullPath}");
                                     }
                                 }
                             }
@@ -383,6 +486,7 @@ namespace winPEAS.Checks
                         });
                     }, Checks.IsDebug);
                 }
+
 
                 // Print results
                 foreach (KeyValuePair<string, Dictionary<string, Dictionary<string, List<string>>>> item in foundRegexes)
@@ -429,7 +533,7 @@ namespace winPEAS.Checks
             // . -> \.
             // * -> .*
             // add $ at the end to avoid false positives
-            
+
             var pattern = str.Replace(".", @"\.")
                              .Replace("*", @".*");
 
@@ -447,11 +551,11 @@ namespace winPEAS.Checks
             resultsCount++;
 
             if (resultsCount > ListFileLimit) return false;
-            
+
             // If contains undesireable string, stop processing
             if (fileSettings.remove_path != null && fileSettings.remove_path.Length > 0)
             {
-                foreach(var rem_path in fileSettings.remove_path.Split('|'))
+                foreach (var rem_path in fileSettings.remove_path.Split('|'))
                 {
                     if (fileInfo.FullPath.ToLower().Contains(rem_path.ToLower()))
                         return false;
@@ -460,19 +564,23 @@ namespace winPEAS.Checks
 
             if (fileSettings.type == "f")
             {
-                var colors = new Dictionary<string, string>();
-                colors.Add(fileInfo.Filename, Beaprint.ansi_color_bad);
+                var colors = new Dictionary<string, string>
+                {
+                    { fileInfo.Filename, Beaprint.ansi_color_bad }
+                };
                 Beaprint.AnsiPrint($"File: {fileInfo.FullPath}", colors);
 
-                if   (!(bool)fileSettings.just_list_file)
+                if (!(bool)fileSettings.just_list_file)
                 {
                     GrepResult(fileInfo, fileSettings);
                 }
             }
             else if (fileSettings.type == "d")
             {
-                var colors = new Dictionary<string, string>();
-                colors.Add(fileInfo.Filename, Beaprint.ansi_color_bad);
+                var colors = new Dictionary<string, string>
+                {
+                    { fileInfo.Filename, Beaprint.ansi_color_bad }
+                };
                 Beaprint.AnsiPrint($"Folder: {fileInfo.FullPath}", colors);
 
                 // just list the directory
@@ -487,7 +595,7 @@ namespace winPEAS.Checks
                 }
                 else
                 {
-                   // should not happen
+                    // should not happen
                 }
             }
 
@@ -531,11 +639,11 @@ namespace winPEAS.Checks
                 {
                     lineGrep = SanitizeLineGrep(fileSettings.line_grep);
                 }
-                
+
                 fileContent = fileContent.Where(line => (!string.IsNullOrWhiteSpace(fileSettings.good_regex) && Regex.IsMatch(line, fileSettings.good_regex, RegexOptions.IgnoreCase)) ||
                                                        (!string.IsNullOrWhiteSpace(fileSettings.bad_regex) && Regex.IsMatch(line, fileSettings.bad_regex, RegexOptions.IgnoreCase)) ||
                                                        (!string.IsNullOrWhiteSpace(lineGrep) && Regex.IsMatch(line, lineGrep, RegexOptions.IgnoreCase)));
-            }    
+            }
 
             var content = string.Join(Environment.NewLine, fileContent);
 

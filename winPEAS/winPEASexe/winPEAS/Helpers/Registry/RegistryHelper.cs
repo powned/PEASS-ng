@@ -1,7 +1,7 @@
-﻿using System;
+﻿using Microsoft.Win32;
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using Microsoft.Win32;
 
 namespace winPEAS.Helpers.Registry
 {
@@ -22,6 +22,40 @@ namespace winPEAS.Helpers.Registry
 
             else
                 return Microsoft.Win32.Registry.LocalMachine.OpenSubKey(path);
+        }
+
+        public static bool WriteRegValue(string hive, string path, string keyName, string value)
+        {
+            try
+            {
+                RegistryKey regKey;
+                if (hive == "HKCU")
+                {
+                    regKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(path);
+                }
+                else if (hive == "HKU")
+                {
+                    regKey = Microsoft.Win32.Registry.Users.OpenSubKey(path);
+
+                }
+                else
+                {
+                    regKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(path);
+                }
+
+                if (regKey == null)
+                {
+                    return false;
+                }
+
+                regKey.SetValue(keyName, value, RegistryValueKind.String);
+            }
+            catch (Exception ex)
+            {
+                return false;
+            }
+
+            return true;
         }
 
         public static string GetRegValue(string hive, string path, string value)
@@ -177,7 +211,7 @@ namespace winPEAS.Helpers.Registry
 
         internal static uint? GetDwordValue(string hive, string key, string val)
         {
-            string strValue = RegistryHelper.GetRegValue(hive, key, val);
+            string strValue = GetRegValue(hive, key, val);
 
             if (uint.TryParse(strValue, out uint res))
             {

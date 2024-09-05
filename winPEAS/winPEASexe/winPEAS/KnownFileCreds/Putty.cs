@@ -1,6 +1,6 @@
-﻿using System;
+﻿using Microsoft.Win32;
+using System;
 using System.Collections.Generic;
-using Microsoft.Win32;
 using winPEAS.Helpers;
 using winPEAS.Helpers.Registry;
 
@@ -20,7 +20,7 @@ namespace winPEAS.KnownFileCreds
             try
             {
                 Beaprint.MainPrint("Putty Sessions");
-                List<Dictionary<string, string>> putty_sess = Putty.GetPuttySessions();
+                List<Dictionary<string, string>> putty_sess = GetPuttySessions();
 
                 Dictionary<string, string> colorF = new Dictionary<string, string>()
                         {
@@ -39,7 +39,7 @@ namespace winPEAS.KnownFileCreds
             try
             {
                 Beaprint.MainPrint("Putty SSH Host keys");
-                List<Dictionary<string, string>> putty_sess = Putty.ListPuttySSHHostKeys();
+                List<Dictionary<string, string>> putty_sess = ListPuttySSHHostKeys();
                 Dictionary<string, string> colorF = new Dictionary<string, string>()
                         {
                             { ".*", Beaprint.ansi_color_bad },
@@ -129,6 +129,24 @@ namespace winPEAS.KnownFileCreds
             else
             {
                 string[] subKeys = RegistryHelper.GetRegSubkeys("HKCU", "Software\\SimonTatham\\PuTTY\\Sessions\\");
+                RegistryKey selfKey = Registry.CurrentUser.OpenSubKey(@"Software\\SimonTatham\\PuTTY\\Sessions"); // extract own Sessions registry keys           
+
+                if (selfKey != null)
+                {
+                    string[] subKeyNames = selfKey.GetValueNames();
+                    foreach (string name in subKeyNames)
+                    {
+                        Dictionary<string, string> putty_sess_key = new Dictionary<string, string>()
+                        {
+                            { "RegKey Name", name },
+                            { "RegKey Value", (string)selfKey.GetValue(name) },
+                        };
+
+                        results.Add(putty_sess_key);
+                    }
+                    selfKey.Close();
+                }
+                
                 foreach (string sessionName in subKeys)
                 {
                     Dictionary<string, string> putty_sess = new Dictionary<string, string>()
@@ -182,8 +200,10 @@ namespace winPEAS.KnownFileCreds
                         Dictionary<string, object> hostKeys = RegistryHelper.GetRegValues("HKU", string.Format("{0}\\Software\\SimonTatham\\PuTTY\\SshHostKeys\\", SID));
                         if ((hostKeys != null) && (hostKeys.Count != 0))
                         {
-                            Dictionary<string, string> putty_ssh = new Dictionary<string, string>();
-                            putty_ssh["UserSID"] = SID;
+                            Dictionary<string, string> putty_ssh = new Dictionary<string, string>
+                            {
+                                ["UserSID"] = SID
+                            };
                             foreach (KeyValuePair<string, object> kvp in hostKeys)
                             {
                                 putty_ssh[kvp.Key] = ""; //Looks like only matters the key name, not the value

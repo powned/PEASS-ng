@@ -6,7 +6,6 @@ using System.Linq;
 using System.Management;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using winPEAS.Helpers;
@@ -33,7 +32,7 @@ namespace winPEAS.Info.ProcessInfo
                                     Proc = p,
                                     Pth = (string)mo["ExecutablePath"],
                                     CommLine = (string)mo["CommandLine"],
-                                    Owner = Helpers.HandlesHelper.GetProcU(p)["name"], //Needed inside the next foreach
+                                    Owner = HandlesHelper.GetProcU(p)["name"], //Needed inside the next foreach
                                 };
 
                     foreach (var itm in queRy)
@@ -54,14 +53,16 @@ namespace winPEAS.Info.ProcessInfo
                             }
                             if ((string.IsNullOrEmpty(companyName)) || (!Regex.IsMatch(companyName, @"^Microsoft.*", RegexOptions.IgnoreCase)))
                             {
-                                Dictionary<string, string> to_add = new Dictionary<string, string>();
-                                to_add["Name"] = itm.Proc.ProcessName;
-                                to_add["ProcessID"] = itm.Proc.Id.ToString();
-                                to_add["ExecutablePath"] = itm.Pth;
-                                to_add["Product"] = companyName;
-                                to_add["Owner"] = itm.Owner == null ? "" : itm.Owner;
-                                to_add["isDotNet"] = isDotNet;
-                                to_add["CommandLine"] = itm.CommLine;
+                                Dictionary<string, string> to_add = new Dictionary<string, string>
+                                {
+                                    ["Name"] = itm.Proc.ProcessName,
+                                    ["ProcessID"] = itm.Proc.Id.ToString(),
+                                    ["ExecutablePath"] = itm.Pth,
+                                    ["Product"] = companyName,
+                                    ["Owner"] = itm.Owner == null ? "" : itm.Owner,
+                                    ["isDotNet"] = isDotNet,
+                                    ["CommandLine"] = itm.CommLine
+                                };
                                 f_results.Add(to_add);
                             }
                         }
@@ -75,14 +76,27 @@ namespace winPEAS.Info.ProcessInfo
             return f_results;
         }
 
-        public static List<Dictionary<string, string>> GetVulnHandlers()
+        public static List<Dictionary<string, string>> GetVulnHandlers(ProgressBar progress)
         {
             List<Dictionary<string, string>> vulnHandlers = new List<Dictionary<string, string>>();
             List<HandlesHelper.SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX> handlers = HandlesHelper.GetAllHandlers();
             List<string> interestingHandlerTypes = new List<string>() { "file", "key", "process", "thread" }; //section
 
+            int processedHandlersCount = 0;
+            int UPDATE_PROGRESSBAR_COUNT = 500;
+            double pb = 0;
+            int totalCount = handlers.Count;
+
             foreach (HandlesHelper.SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX h in handlers)
             {
+                processedHandlersCount++;
+
+                if (processedHandlersCount % UPDATE_PROGRESSBAR_COUNT == 0)
+                {
+                    pb = (double)processedHandlersCount / totalCount;
+                    progress.Report(pb); //Value must be in [0..1] range
+                }
+
                 // skip some objects to avoid getting stuck
                 // see: https://github.com/adamdriscoll/PoshInternals/issues/7
                 if (h.GrantedAccess == 0x0012019f
@@ -123,11 +137,13 @@ namespace winPEAS.Info.ProcessInfo
 
                         string hName = HandlesHelper.GetObjectName(dupHandle);
 
-                        Dictionary<string, string> to_add = new Dictionary<string, string>();
-                        to_add["Handle Name"] = hName;
-                        to_add["Handle"] = h.HandleValue.ToString() + "(" + typeName + ")";
-                        to_add["Handle Owner"] = "Pid is " + h.UniqueProcessId.ToString() + "(" + origProcInfo.name + ") with owner: " + origProcInfo.userName;
-                        to_add["Reason"] = handlerExp.reason;
+                        Dictionary<string, string> to_add = new Dictionary<string, string>
+                        {
+                            ["Handle Name"] = hName,
+                            ["Handle"] = h.HandleValue.ToString() + "(" + typeName + ")",
+                            ["Handle Owner"] = "Pid is " + h.UniqueProcessId.ToString() + "(" + origProcInfo.name + ") with owner: " + origProcInfo.userName,
+                            ["Reason"] = handlerExp.reason
+                        };
 
                         if (typeName == "process" || typeName == "thread")
                         {
@@ -177,7 +193,7 @@ namespace winPEAS.Info.ProcessInfo
                             string sFilePath = fni.FileName;
                             if (sFilePath.Length == 0)
                                 continue;
-                            
+
                             List<string> permsFile = PermissionsHelper.GetPermissionsFile(sFilePath, Checks.Checks.CurrentUserSiDs, PermissionType.WRITEABLE_OR_EQUIVALENT);
                             try
                             {
@@ -208,13 +224,13 @@ namespace winPEAS.Info.ProcessInfo
                         else if (typeName == "key")
                         {
                             HandlesHelper.KEY_RELEVANT_INFO kri = HandlesHelper.getKeyHandlerInfo(dupHandle);
-                            if (kri.path.Length == 0 && kri.hive != null && kri.hive.Length> 0)
+                            if (kri.path.Length == 0 && kri.hive != null && kri.hive.Length > 0)
                                 continue;
 
                             RegistryKey regKey = Helpers.Registry.RegistryHelper.GetReg(kri.hive, kri.path);
                             if (regKey == null)
                                 continue;
-                            
+
                             List<string> permsReg = PermissionsHelper.GetMyPermissionsR(regKey, Checks.Checks.CurrentUserSiDs);
 
                             // If current user already have permissions over that reg, handle not interesting to elevate privs

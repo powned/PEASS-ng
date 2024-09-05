@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
+using DirectoryInfo = Alphaleonis.Win32.Filesystem.DirectoryInfo;
 
 namespace winPEAS.Helpers.Search
 {
@@ -44,7 +46,7 @@ namespace winPEAS.Helpers.Search
             ConcurrentBag<CustomFileInfo> files = new ConcurrentBag<CustomFileInfo>();
             IEnumerable<DirectoryInfo> startDirs = GetStartDirectories(folder, files, pattern, isFoldersIncluded);
             IList<DirectoryInfo> startDirsExcluded = new List<DirectoryInfo>();
-            IList<string> known_dirs = new List<string>();
+            ConcurrentDictionary<string, byte> known_dirs = new ConcurrentDictionary<string, byte>();
 
             if (excludedDirs != null)
             {
@@ -68,37 +70,27 @@ namespace winPEAS.Helpers.Search
 
             Parallel.ForEach(startDirsExcluded, (d) =>
             {
-                Parallel.ForEach(GetStartDirectories(d.FullName, files, pattern, isFoldersIncluded), (dir) =>
+                var foundFiles = GetFiles(d.FullName, pattern);
+                foreach (var f in foundFiles)
                 {
-                    GetFiles(dir.FullName, pattern).ForEach(
-                        (f) =>
-                        {
-                            if (!StaticExtensions.Contains(f.Extension.ToLower()))
-                            {
-                                // It should always be lesss than 260, but some times it isn't so this will bypass that file
-                                if (Checks.Checks.IsLongPath || f.FullName.Length <= 260)
-                                {
-                                    CustomFileInfo file_info = new CustomFileInfo(f.Name, f.Extension, f.FullName, f.Length, false);
-                                    files.Add(file_info);
+                    if (f != null && !StaticExtensions.Contains(f.Extension.ToLower()))
+                    {
+                        CustomFileInfo file_info = new CustomFileInfo(f.Name, f.Extension, f.FullName, f.Length, false);
+                        files.Add(file_info);
 
-                                    CustomFileInfo file_dir = new CustomFileInfo(f.Directory.Name, "", f.Directory.FullName, 0, true);
-                                    if (!known_dirs.Contains(file_dir.FullPath))
-                                    {
-                                        known_dirs.Add(file_dir.FullPath);
-                                        files.Add(file_dir);
-                                    }
-                                }
-                                else if (f.FullName.Length > 260)
-                                    Beaprint.LongPathWarning(f.FullName);
-                            }
+                        CustomFileInfo file_dir = new CustomFileInfo(f.Directory.Name, "", f.Directory.FullName, 0, true);
+                        if (known_dirs.TryAdd(file_dir.FullPath, 0))
+                        {
+                            files.Add(file_dir);
                         }
-                        ) ;
-                });
+                    }
+                }
             });
 
             return files.ToList();
         }
-       
+
+
         private static List<FileInfo> GetFiles(string folder, string pattern = "*")
         {
             DirectoryInfo dirInfo;
@@ -130,16 +122,22 @@ namespace winPEAS.Helpers.Search
                 return new List<FileInfo>();
             }
 
-            List<FileInfo> result = new List<FileInfo>();
+            ConcurrentBag<FileInfo> result = new ConcurrentBag<FileInfo>();
 
-            foreach (var d in directories)
+            Parallel.ForEach(directories, (d) =>
             {
-                result.AddRange(GetFiles(d.FullName, pattern));
-            }
+                foreach (var file in GetFiles(d.FullName, pattern))
+                {
+                    result.Add(file);
+                }
+            });
 
             try
             {
-                result.AddRange(dirInfo.GetFiles(pattern));
+                foreach (var file in dirInfo.GetFiles(pattern))
+                {
+                    result.Add(file);
+                }
             }
             catch (UnauthorizedAccessException)
             {
@@ -154,7 +152,7 @@ namespace winPEAS.Helpers.Search
             {
             }
 
-            return result;
+            return result.ToList();
         }
 
         private static IEnumerable<DirectoryInfo> GetStartDirectories(string folder, ConcurrentBag<CustomFileInfo> files, string pattern, bool isFoldersIncluded = false)
@@ -221,43 +219,43 @@ namespace winPEAS.Helpers.Search
         {
             // c:\users
             string rootUsersSearchPath = $"{SystemDrive}\\Users\\";
-            SearchHelper.RootDirUsers = SearchHelper.GetFilesFast(rootUsersSearchPath, GlobalPattern, isFoldersIncluded: true);
+            RootDirUsers = GetFilesFast(rootUsersSearchPath, GlobalPattern, isFoldersIncluded: true);
 
             // c:\users\current_user
             string rootCurrentUserSearchPath = Environment.GetEnvironmentVariable("USERPROFILE");
-            SearchHelper.RootDirCurrentUser = SearchHelper.GetFilesFast(rootCurrentUserSearchPath, GlobalPattern, isFoldersIncluded: true);
+            RootDirCurrentUser = GetFilesFast(rootCurrentUserSearchPath, GlobalPattern, isFoldersIncluded: true);
 
             // c:\Program Files\
             string rootProgramFiles = $"{SystemDrive}\\Program Files\\";
-            SearchHelper.ProgramFiles = SearchHelper.GetFilesFast(rootProgramFiles, GlobalPattern, isFoldersIncluded: true);
+            ProgramFiles = GetFilesFast(rootProgramFiles, GlobalPattern, isFoldersIncluded: true);
 
             // c:\Program Files (x86)\
             string rootProgramFilesX86 = $"{SystemDrive}\\Program Files (x86)\\";
-            SearchHelper.ProgramFilesX86 = SearchHelper.GetFilesFast(rootProgramFilesX86, GlobalPattern, isFoldersIncluded: true);
+            ProgramFilesX86 = GetFilesFast(rootProgramFilesX86, GlobalPattern, isFoldersIncluded: true);
 
             // c:\Documents and Settings\
             string documentsAndSettings = $"{SystemDrive}\\Documents and Settings\\";
-            SearchHelper.DocumentsAndSettings = SearchHelper.GetFilesFast(documentsAndSettings, GlobalPattern, isFoldersIncluded: true);
+            DocumentsAndSettings = GetFilesFast(documentsAndSettings, GlobalPattern, isFoldersIncluded: true);
 
             // c:\ProgramData\Microsoft\Group Policy\History
             string groupPolicyHistory = $"{SystemDrive}\\ProgramData\\Microsoft\\Group Policy\\History";
-            SearchHelper.GroupPolicyHistory = SearchHelper.GetFilesFast(groupPolicyHistory, GlobalPattern, isFoldersIncluded: true);
+            GroupPolicyHistory = GetFilesFast(groupPolicyHistory, GlobalPattern, isFoldersIncluded: true);
 
             // c:\Documents and Settings\All Users\Application Data\\Microsoft\\Group Policy\\History
             string groupPolicyHistoryLegacy = $"{documentsAndSettings}\\All Users\\Application Data\\Microsoft\\Group Policy\\History";
             //SearchHelper.GroupPolicyHistoryLegacy = SearchHelper.GetFilesFast(groupPolicyHistoryLegacy, globalPattern);
-            var groupPolicyHistoryLegacyFiles = SearchHelper.GetFilesFast(groupPolicyHistoryLegacy, GlobalPattern, isFoldersIncluded: true);
-            SearchHelper.GroupPolicyHistory.AddRange(groupPolicyHistoryLegacyFiles);
+            var groupPolicyHistoryLegacyFiles = GetFilesFast(groupPolicyHistoryLegacy, GlobalPattern, isFoldersIncluded: true);
+            GroupPolicyHistory.AddRange(groupPolicyHistoryLegacyFiles);
         }
 
         internal static void CleanLists()
         {
-            SearchHelper.RootDirUsers = null;
-            SearchHelper.RootDirCurrentUser = null;
-            SearchHelper.ProgramFiles = null;
-            SearchHelper.ProgramFilesX86 = null;
-            SearchHelper.DocumentsAndSettings = null;
-            SearchHelper.GroupPolicyHistory = null;
+            RootDirUsers = null;
+            RootDirCurrentUser = null;
+            ProgramFiles = null;
+            ProgramFilesX86 = null;
+            DocumentsAndSettings = null;
+            GroupPolicyHistory = null;
 
             GC.Collect();
         }
@@ -270,8 +268,8 @@ namespace winPEAS.Helpers.Search
                 ".*password.*"
             };
 
-            foreach (var file in SearchHelper.RootDirUsers)
-            {                
+            foreach (var file in RootDirUsers)
+            {
                 //string extLower = file.Extension.ToLower();
 
                 if (!file.IsDirectory)
@@ -297,7 +295,7 @@ namespace winPEAS.Helpers.Search
         {
             var result = new List<string>();
 
-            foreach (var file in SearchHelper.RootDirCurrentUser)
+            foreach (var file in RootDirCurrentUser)
             {
                 if (!file.IsDirectory)
                 {
@@ -322,7 +320,7 @@ namespace winPEAS.Helpers.Search
                         }
                     }
 
-                }               
+                }
             }
 
             return result;
@@ -337,7 +335,7 @@ namespace winPEAS.Helpers.Search
                 ".xml"
             };
 
-            foreach (var file in SearchHelper.GroupPolicyHistory)
+            foreach (var file in GroupPolicyHistory)
             {
                 if (!file.IsDirectory)
                 {
@@ -361,14 +359,14 @@ namespace winPEAS.Helpers.Search
             };
 
             string programDataPath = $"{SystemDrive}\\ProgramData\\";
-            var programData = SearchHelper.GetFilesFast(programDataPath, GlobalPattern);
+            var programData = GetFilesFast(programDataPath, GlobalPattern);
 
             var searchFiles = new List<CustomFileInfo>();
-            searchFiles.AddRange(SearchHelper.ProgramFiles);
-            searchFiles.AddRange(SearchHelper.ProgramFilesX86);
+            searchFiles.AddRange(ProgramFiles);
+            searchFiles.AddRange(ProgramFilesX86);
             searchFiles.AddRange(programData);
-            searchFiles.AddRange(SearchHelper.DocumentsAndSettings);
-            searchFiles.AddRange(SearchHelper.RootDirUsers);
+            searchFiles.AddRange(DocumentsAndSettings);
+            searchFiles.AddRange(RootDirUsers);
 
             foreach (var file in searchFiles)
             {
@@ -403,7 +401,7 @@ namespace winPEAS.Helpers.Search
                 ".pdf",
             };
 
-            foreach (var file in SearchHelper.RootDirCurrentUser)
+            foreach (var file in RootDirCurrentUser)
             {
                 if (!file.IsDirectory)
                 {
@@ -426,7 +424,7 @@ namespace winPEAS.Helpers.Search
                             }
                         }
                     }
-                }               
+                }
             }
 
             return result;
@@ -451,7 +449,7 @@ namespace winPEAS.Helpers.Search
                 ".pdf",
             };
 
-            foreach (var file in SearchHelper.RootDirUsers)
+            foreach (var file in RootDirUsers)
             {
                 if (!file.IsDirectory)
                 {
@@ -474,7 +472,7 @@ namespace winPEAS.Helpers.Search
                             }
                         }
                     }
-                }               
+                }
             }
 
             return result;
